@@ -7,7 +7,7 @@
     <title>Document</title>
   </head>
   <body>
-    <button id="connect">連接</button>
+    <button id="connect">更新韌體</button>
   </body>
   <script src="lib/pako_inflate.min.js"></script>
   <script src="lib/crc.js"></script>
@@ -31,7 +31,7 @@
 
     connect.onclick = async () => {
       await kflash.requestSerialPort();
-      await kflash.write(0x000000, firmware, printProgressBarListener);
+      await kflash.write(0x020000, firmware, printProgressBarListener);
     };
   </script>
 </html>
