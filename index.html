@@ -1,37 +1,139 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
-  </head>
-  <body>
-    <button id="connect">更新韌體</button>
-  </body>
-  <script src="lib/pako_inflate.min.js"></script>
-  <script src="lib/crc.js"></script>
-  <script type="module">
-    import kflash from "./kflash.js";
+<head>
+  <meta charset="UTF-8"/>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Document</title>
+</head>
+<body>
+<button id="connect">更新韌體</button>
+<p id="progress">Waiting...</p>
+</body>
+<script src="lib/pako_inflate.min.js"></script>
+<script src="lib/crc.js"></script>
+<script type="module">
+  import kflash, { FlashModeResponse } from "./kflash.js";
+  import struct from "./lib/struct.mjs";
+  import ISP_PROG from "./lib/isp.js";
 
-    // get firmware
-    let firmware = null;
-    fetch("firmware/webai.bin")
-      .then((response) => {
-        return response.blob();
-      })
-      .then((data) => {
-        firmware = data;
-        console.log(firmware);
-      });
+  const ISP_FLASH_SECTOR_SIZE = 4096;
+  const ISP_FLASH_DATA_FRAME_SIZE = ISP_FLASH_SECTOR_SIZE * 16;
+  const progressElem = document.getElementById('progress');
 
-    const printProgressBarListener = (percent) => {
-      console.log(`進度 ${percent}`);
-    };
+  navigator.serial.addEventListener('connect', (e) => {
+    console.log('connect port', e);
+  });
 
-    connect.onclick = async () => {
-      await kflash.requestSerialPort();
-      await kflash.write(0x020000, firmware, printProgressBarListener);
-    };
-  </script>
+  navigator.serial.addEventListener('disconnect', e => {
+    console.log('disconnect ', e);
+  });
+
+  document.getElementById('connect').addEventListener('click', async () => {
+    await navigator.wakeLock.request('screen');
+    await kflash.requestSerialPort();
+
+    fetch('firmware/webai.bin').then(resp => {
+      return resp.blob();
+    }).then(data => {
+      return data.arrayBuffer();
+    }).then(data => {
+      return Array.from(new Uint8Array(data));
+    }).then(firmware => {
+      let address = 0x000000;
+      const addressBinMap = {};
+
+      while (firmware.length) {
+        const chunk = firmware.splice(0, ISP_FLASH_DATA_FRAME_SIZE);
+        while (chunk.length < ISP_FLASH_DATA_FRAME_SIZE) {
+          chunk.push(0);
+        }
+
+        const op_p = new Uint8Array(
+          struct("<HH").pack(
+            FlashModeResponse.Operation.ISP_FLASH_WRITE,
+            0x00
+          )
+        );
+
+        const address_p = new Uint8Array(
+          struct("<II").pack(address, chunk.length)
+        );
+
+        const crc32_checksum = new Uint8Array(
+          struct("<I").pack(
+            crc.crc32([...address_p, ...chunk]) & 0xffffffff
+          )
+        );
+
+        const packet = [...op_p, ...crc32_checksum, ...address_p, ...chunk];
+
+        addressBinMap[address] = packet;
+        address += ISP_FLASH_DATA_FRAME_SIZE;
+      }
+
+      return addressBinMap;
+    }).then(async (addressBinMap) => {
+      console.time('firmware');
+      console.log(addressBinMap)
+      const loader = await kflash.init_write();
+      let progress = 0;
+
+      for (let address in addressBinMap) {
+        const addressList = Object.keys(addressBinMap);
+        const idx = addressList.findIndex(_address => _address === address);
+        progress = (idx / addressList.length * 100).toFixed(2);
+
+        progressElem.innerText = progress + '%';
+
+        let resp = await loader.flash_firmware(addressBinMap[address]);
+        console.log(new Date(), address, resp);
+        while (!resp) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * 1));
+          await kflash.reboot();
+          await new Promise((resolve) => setTimeout(resolve, 1000 * 5));
+          const init_resp = await Promise.race([kflash.init_write, new Promise(resolve => setTimeout(
+            () => resolve(false),
+            60 * 1000))]);
+          if (!init_resp) continue;
+          resp = await loader.flash_firmware(addressBinMap[address]);
+        }
+      }
+      return loader;
+    }).then((loader) => {
+      loader.reset_to_boot();
+      progressElem.innerText = '100%'
+      console.timeEnd('firmware');
+    });
+  });
+
+
+  // get firmware
+  // let firmware = null;
+  // fetch("firmware/webai.bin")
+  //   .then((response) => {
+  //     return response.blob();
+  //   })
+  //   .then((data) => {
+  //     firmware = data;
+  //     console.log(firmware);
+  //   });
+
+  // const printProgressBarListener = (percent) => {
+  //   console.log(`進度 ${percent}`);
+  // };
+  //
+  // console.log(board_boot)
+  //
+  // connect.onclick = async () => {
+  //   await kflash.requestSerialPort();
+  //   window.dispatchEvent(write_firmware);
+  // };
+  //
+  // window.addEventListener('write_firmware',async () => {
+  //   console.log('write_firmware');
+  //   const result = await kflash.write(0x000000, firmware, printProgressBarListener);
+  //   if (!result) window.dispatchEvent(write_firmware);
+  // });
+</script>
 </html>
