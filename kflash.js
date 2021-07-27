@@ -213,9 +213,22 @@ class KFlash {
   }
 
   async reboot() {
-    this.port.restart();
-    await delay(5);
-    console.log('reboot');
+    await this.port.setDTR(0);
+    await this.port.setRTS(0);
+    await delay(0.1);
+
+    // console.log('-- RESET to LOW --')
+    // Pull reset down and keep 10ms
+    await this.port.setDTR(0);
+    await this.port.setRTS(1);
+    await delay(0.1);
+
+    // console.log('-- RESET to HIGH, BOOT --')
+    // Pull IO16 to low and release reset
+    await this.port.setRTS(0);
+    await this.port.setDTR(0);
+    await delay(0.1);
+    console.log('reboot')
   }
 
   async init_write() {
@@ -377,6 +390,7 @@ class KFlash {
           ])
         );
         ISPResponse.parse(await this.recv_one_return());
+        console.log('greeting end');
       }
 
       async flash_greeting() {
@@ -455,7 +469,11 @@ class KFlash {
             // console.log(packet.map((e) => e.toString(16)));
             console.log("write", `0x${address.toString(16)}`, packet.length);
             await this.write(packet);
-            if (await this.recv_debug()) {
+            const resp = await this.recv_debug();
+            if (resp === 'timeout') {
+              return 'timeout';
+            }
+            if (resp) {
               address += DATAFRAME_SIZE;
               break;
             }
@@ -465,7 +483,7 @@ class KFlash {
       }
 
       async install_flash_bootloader(data) {
-        await this.flash_dataframe(data, 0x80000000);
+        return await this.flash_dataframe(data, 0x80000000);
       }
 
       async change_baudrate(baudrate = 2000000) {
@@ -481,9 +499,12 @@ class KFlash {
           )
         );
         const packet = [...op_p, ...crc32_checksum, ...baudrate_p];
+
         await this.write(packet);
+
         await delay(0.05);
         await _port.changeBaud(baudrate);
+        console.log('changeBaud end')
       }
 
       async boot(address = 0x80000000) {
@@ -564,6 +585,8 @@ class KFlash {
 
     // init
     this.loader = new MAIXLoader();
+    console.log('change_baudrate 115200')
+    await this.loader.change_baudrate(115200);
 
     // 1. Greeting
     console.log("Trying to Enter the ISP Mode...");
@@ -594,7 +617,8 @@ class KFlash {
 
     // 2. download bootloader and firmware
     console.log("download bootloader and firmware");
-    await this.loader.install_flash_bootloader(isp_compressed);
+    const resp = await this.loader.install_flash_bootloader(isp_compressed);
+    if (resp === 'timeout') return 'timeout';
 
     // Boot the code from SRAM
     await this.loader.boot();
@@ -605,7 +629,7 @@ class KFlash {
     console.log("flash_greeting");
     await this.loader.flash_greeting();
 
-    console.log("change_baudrate");
+    console.log("change_baudrate 2000000");
     await this.loader.change_baudrate();
     console.log("flash_greeting");
     await this.loader.flash_greeting();

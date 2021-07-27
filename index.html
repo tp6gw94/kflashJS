@@ -75,8 +75,15 @@
       return addressBinMap;
     }).then(async (addressBinMap) => {
       console.time('firmware');
-      console.log(addressBinMap)
-      const loader = await kflash.init_write();
+      console.log(addressBinMap);
+      progressElem.innerText = 'init...';
+      let loader = await kflash.init_write();
+
+      while (loader === 'timeout') {
+        await kflash.reboot();
+        loader = await kflash.init_write();
+      }
+
       let progress = 0;
 
       for (let address in addressBinMap) {
@@ -87,21 +94,23 @@
         progressElem.innerText = progress + '%';
 
         let resp = await loader.flash_firmware(addressBinMap[address]);
-        console.log(new Date(), address, resp);
+        console.log(new Date(), address.toString(16), resp);
         while (!resp) {
           await new Promise((resolve) => setTimeout(resolve, 1000 * 1));
           await kflash.reboot();
+          console.log("Rebooting...");
           await new Promise((resolve) => setTimeout(resolve, 1000 * 5));
-          const init_resp = await Promise.race([kflash.init_write, new Promise(resolve => setTimeout(
-            () => resolve(false),
-            60 * 1000))]);
-          if (!init_resp) continue;
+          await kflash.init_write();
+          // const init_resp = await Promise.race([kflash.init_write, new Promise(resolve => setTimeout(
+          //   () => resolve(false),
+          //   60 * 1000))]);
+          // if (!init_resp) continue;
           resp = await loader.flash_firmware(addressBinMap[address]);
         }
       }
       return loader;
-    }).then((loader) => {
-      loader.reset_to_boot();
+    }).then(async (loader) => {
+      await kflash.reboot();
       progressElem.innerText = '100%'
       console.timeEnd('firmware');
     });
