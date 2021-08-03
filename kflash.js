@@ -1,7 +1,7 @@
 import struct from "./lib/struct.mjs";
 import ISP_PROG from "./lib/isp.js";
 
-const delay = async (sec) => new Promise((r) => setTimeout(r, sec * 1000));
+export const delay = async (sec) => new Promise((r) => setTimeout(r, sec * 1000));
 
 class Port {
   async init() {
@@ -19,17 +19,29 @@ class Port {
 
   async changeBaud(speed) {
     await this.close();
+    delay(1);
+    console.log('open port')
     await this.serialPort.open({
       baudRate: speed,
       bufferSize: 1 * 1024 * 1024,
     });
+    delay(1);
+    console.log('open reader')
     await this.openReader();
+    console.log('open writer')
     await this.openWriter();
+    delay(1);
+    console.log('changeBaud, port', this.serialPort)
   }
 
   async close() {
+    console.log('cancel reader')
+    await this.reader.cancel()
+    console.log('release reader')
     this.releaseReader();
+    console.log('realease wirter')
     this.releaseWriter();
+    console.log('port close');
     await this.serialPort.close();
   }
 
@@ -242,6 +254,7 @@ class KFlash {
 
     class MAIXLoader {
       async write(packet) {
+        console.log('start write')
         let handlePacket = [];
 
         packet.forEach((e) => {
@@ -395,7 +408,7 @@ class KFlash {
 
       async flash_greeting() {
         console.log('flash_greeting');
-        retry_count = 0;
+        let retry_count = 0;
         while (true) {
           await _port.writer.write(
             new Uint8Array([
@@ -482,7 +495,7 @@ class KFlash {
         console.log(`Downlaod ISP OK`);
       }
 
-      async install_flash_bootloader(data) {
+      async install_flash_bootloader(data = isp_compressed) {
         return await this.flash_dataframe(data, 0x80000000);
       }
 
@@ -585,58 +598,10 @@ class KFlash {
 
     // init
     this.loader = new MAIXLoader();
-    console.log('change_baudrate 115200')
-    await this.loader.change_baudrate(115200);
-
-    // 1. Greeting
-    console.log("Trying to Enter the ISP Mode...");
-    let retry_count = 0;
-    while (true) {
-      try {
-        retry_count += 1;
-        if (retry_count > 15) {
-          console.log(
-            "[ERROR]",
-            "No vaild Kendryte K210 found in Auto Detect, Check Your Connection or Specify One by"
-          );
-        }
-        try {
-          console.log(".");
-          await this.loader.reset_to_isp();
-          await this.loader.greeting();
-          break;
-        }
-        catch {
-          console.log("timeouterror");
-        }
-      }
-      catch {
-        console.log("Greeting fail, check serial port");
-      }
-    }
-
-    // 2. download bootloader and firmware
-    console.log("download bootloader and firmware");
-    const resp = await this.loader.install_flash_bootloader(isp_compressed);
-    if (resp === 'timeout') return 'timeout';
-
-    // Boot the code from SRAM
-    await this.loader.boot();
-
-    console.log("Wait For 0.1 second for ISP to Boot");
-    await delay(0.1);
-
-    console.log("flash_greeting");
-    await this.loader.flash_greeting();
-
-    console.log("change_baudrate 2000000");
-    await this.loader.change_baudrate();
-    console.log("flash_greeting");
-    await this.loader.flash_greeting();
-    console.log("init_flash");
-    await this.loader.init_flash();
-
+    // await _port.changeBaud(115200);
     return this.loader;
+    // await this.loader.change_baudrate(115200);
+
 
     // console.log("flash_firmware");
     // await this.loader.flash_firmware(blob);

@@ -13,7 +13,7 @@
 <script src="lib/pako_inflate.min.js"></script>
 <script src="lib/crc.js"></script>
 <script type="module">
-  import kflash, { FlashModeResponse } from "./kflash.js";
+  import kflash, { FlashModeResponse, delay } from "./kflash.js";
   import struct from "./lib/struct.mjs";
   import ISP_PROG from "./lib/isp.js";
 
@@ -77,11 +77,69 @@
       console.time('firmware');
       console.log(addressBinMap);
       progressElem.innerText = 'init...';
-      let loader = await kflash.init_write();
+      const loader = await kflash.init_write();
 
-      while (loader === 'timeout') {
-        await kflash.reboot();
-        loader = await kflash.init_write();
+      const boot = async () => {
+        console.log('change_baudrate 115200')
+        await loader.change_baudrate(115200);
+        // 1. Greeting
+        console.log("Trying to Enter the ISP Mode...");
+        let retry_count = 0;
+        while (true) {
+          try {
+            retry_count += 1;
+            if (retry_count > 15) {
+              console.log(
+                "[ERROR]",
+                "No vaild Kendryte K210 found in Auto Detect, Check Your Connection or Specify One by"
+              );
+            }
+            try {
+              console.log(".");
+              await loader.reset_to_isp();
+              await loader.greeting();
+              break;
+            }
+            catch (e) {
+              console.log(e)
+              console.log("timeouterror");
+            }
+          }
+          catch {
+            console.log("Greeting fail, check serial port");
+          }
+        }
+
+        // 2. download bootloader and firmware
+        console.log("download bootloader and firmware");
+        const resp = await loader.install_flash_bootloader();
+        if (resp === 'timeout') return 'timeout';
+
+        // Boot the code from SRAM
+        await loader.boot();
+
+        console.log("Wait For 0.1 second for ISP to Boot");
+        await delay(0.1);
+
+        console.log("flash_greeting");
+        await loader.flash_greeting();
+
+        console.log("change_baudrate 2000000");
+
+        await loader.change_baudrate(2000000);
+        await delay(0.01)
+
+        console.log("flash_greeting");
+        await loader.flash_greeting();
+        console.log("init_flash");
+        await loader.init_flash();
+      }
+
+      let bootResp = await boot();
+
+      while (bootResp === 'timeout') {
+        // await loader.reset_to_boot();
+        bootResp = await boot();
       }
 
       let progress = 0;
@@ -94,13 +152,17 @@
         progressElem.innerText = progress + '%';
 
         let resp = await loader.flash_firmware(addressBinMap[address]);
-        console.log(new Date(), address.toString(16), resp);
+        console.log(new Date(), address, resp);
         while (!resp) {
           await new Promise((resolve) => setTimeout(resolve, 1000 * 1));
-          await kflash.reboot();
+          await loader.reset_to_boot();
           console.log("Rebooting...");
           await new Promise((resolve) => setTimeout(resolve, 1000 * 5));
-          await kflash.init_write();
+          bootResp = await boot();
+          while (bootResp === 'timeout') {
+            await loader.reset_to_boot();
+            bootResp = await boot();
+          }
           // const init_resp = await Promise.race([kflash.init_write, new Promise(resolve => setTimeout(
           //   () => resolve(false),
           //   60 * 1000))]);
